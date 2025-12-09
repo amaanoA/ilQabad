@@ -16,7 +16,7 @@ Face recognition attendance system built with Clean Architecture and TDD.
 |-----------|--------|------|
 | YuNetDetector | Complete | [Guide](components/yunet_detector.md) |
 | MobileFaceNetRecognizer | Complete | [Guide](components/mobilefacenet_recognizer.md) |
-| DeePixBiSLiveness | Planned | TBD |
+| DeePixBiSLiveness | Complete | [Guide](components/deeppixbis_liveness.md) |
 
 ## Architecture Decisions
 
@@ -24,6 +24,7 @@ Face recognition attendance system built with Clean Architecture and TDD.
 |-----|-------|--------|
 | [001](architecture/decisions/001-yunet-face-detection.md) | YuNet for Face Detection | Accepted |
 | [002](architecture/decisions/002-mobilefacenet-recognition.md) | MobileFaceNet for Recognition | Accepted |
+| [003](architecture/decisions/003-deeppixbis-liveness.md) | DeePixBiS for Anti-Spoofing | Accepted |
 
 ## Directory Structure
 
@@ -36,11 +37,13 @@ docs/
 │   └── decisions/                     # ADRs (Architecture Decision Records)
 │       ├── 001-yunet-face-detection.md
 │       ├── 002-mobilefacenet-recognition.md
+│       ├── 003-deeppixbis-liveness.md
 │       └── template.md
 ├── components/
 │   ├── README.md                      # Components overview
 │   ├── yunet_detector.md              # YuNet documentation
-│   └── mobilefacenet_recognizer.md    # MobileFaceNet documentation
+│   ├── mobilefacenet_recognizer.md    # MobileFaceNet documentation
+│   └── deeppixbis_liveness.md         # DeePixBiS documentation
 ├── development/
 │   ├── setup.md                       # Development environment setup
 │   ├── testing.md                     # Testing guide
@@ -77,7 +80,7 @@ poetry run pytest
 | Metric | Value |
 |--------|-------|
 | Test Coverage | 94% |
-| Tests Passing | 98 |
+| Tests Passing | 310 |
 | Phase | 2 (ML Components) |
 
 ## License
