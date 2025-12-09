@@ -68,6 +68,9 @@ class DeePixBiSLiveness:
         self._input_name = self._session.get_inputs()[0].name
         self._output_names = [o.name for o in self._session.get_outputs()]
 
+        # Create a mapping for output names to indices
+        self._output_indices = {name: i for i, name in enumerate(self._output_names)}
+
     def check(self, face_image: npt.NDArray[np.uint8]) -> LivenessResult:
         """Check if a face image is live or a spoof.
 
@@ -88,20 +91,40 @@ class DeePixBiSLiveness:
         # Parse outputs - DeePixBiS has two outputs:
         # output_pixel: [1, 1, 14, 14] - spatial liveness map
         # output_binary: [1, 1] - binary liveness score
-        pixel_output = outputs[0]  # [1, 1, 14, 14]
-        binary_output = outputs[1]  # [1, 1]
+        # Use output names to get correct indices
+        if "output_binary" in self._output_indices:
+            binary_idx = self._output_indices["output_binary"]
+            pixel_idx = self._output_indices["output_pixel"]
+        else:
+            # Fallback: assume pixel is first, binary is second based on shape
+            if outputs[0].shape[-1] == 14:
+                pixel_idx, binary_idx = 0, 1
+            else:
+                pixel_idx, binary_idx = 1, 0
 
-        # Extract liveness score (apply sigmoid if raw logits)
-        raw_score = float(binary_output[0, 0])
-        # Apply sigmoid to convert logit to probability
-        confidence = 1.0 / (1.0 + np.exp(-raw_score))
+        binary_output = outputs[binary_idx]
+        pixel_output = outputs[pixel_idx]
+
+        # Extract liveness score
+        raw_score = float(binary_output.flatten()[0])
+
+        # Check if output is logit or probability
+        # If value is outside [0, 1], it's a logit and needs sigmoid
+        if raw_score < 0.0 or raw_score > 1.0:
+            confidence = 1.0 / (1.0 + np.exp(-raw_score))
+        else:
+            confidence = raw_score
 
         # Ensure confidence is in valid range
         confidence = float(np.clip(confidence, 0.0, 1.0))
 
-        # Extract pixel map and apply sigmoid
-        pixel_map = pixel_output[0, 0]  # [14, 14]
-        pixel_map = 1.0 / (1.0 + np.exp(-pixel_map))  # Apply sigmoid
+        # Extract pixel map and squeeze to 2D
+        pixel_map = pixel_output.squeeze()  # [14, 14]
+
+        # Apply sigmoid if values are outside [0, 1]
+        if pixel_map.min() < 0.0 or pixel_map.max() > 1.0:
+            pixel_map = 1.0 / (1.0 + np.exp(-pixel_map))
+
         pixel_map = pixel_map.astype(np.float32)
 
         # Determine liveness based on threshold
