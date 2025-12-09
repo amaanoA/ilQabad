@@ -4,7 +4,7 @@ This module defines the anti-spoofing detection abstraction for
 determining if a face is real or a spoof attempt.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Protocol, runtime_checkable
 
@@ -38,11 +38,14 @@ class LivenessResult:
         is_live: Whether the face is determined to be live.
         confidence: Confidence score between 0.0 and 1.0.
         spoof_type: Type of spoof if detected, NONE if live.
+        pixel_map: Optional spatial liveness map from pixel-wise models.
+            Shape is typically (H, W) with values between 0.0 and 1.0.
     """
 
     is_live: bool
     confidence: float
     spoof_type: SpoofType
+    pixel_map: npt.NDArray[np.float32] | None = field(default=None)
 
     def __post_init__(self) -> None:
         """Validate result after initialization."""
