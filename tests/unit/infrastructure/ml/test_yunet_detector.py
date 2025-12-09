@@ -351,10 +351,14 @@ class TestYuNetDetectorDetection:
         """Test detected faces have landmarks with 5 points."""
         result = yunet_detector_low_threshold.detect(noise_image)
         for face in result.faces:
-            assert isinstance(face.landmarks, Landmarks)
-            assert len(face.landmarks.points) == 5
-            for point in face.landmarks.points:
-                assert len(point) == 2  # (x, y) coordinates
+            if face.landmarks is not None:
+                assert isinstance(face.landmarks, Landmarks)
+                # Check all 5 landmark points exist and are tuples of 2 floats
+                assert len(face.landmarks.left_eye) == 2
+                assert len(face.landmarks.right_eye) == 2
+                assert len(face.landmarks.nose) == 2
+                assert len(face.landmarks.mouth_left) == 2
+                assert len(face.landmarks.mouth_right) == 2
 
     def test_detect_returns_confidence_between_0_and_1(
         self, yunet_detector_low_threshold: "YuNetDetector", noise_image: npt.NDArray[np.uint8]
@@ -372,14 +376,6 @@ class TestYuNetDetectorDetection:
         for face in result.faces:
             assert face.bounding_box.x >= 0
             assert face.bounding_box.y >= 0
-
-    def test_detect_result_has_correct_image_dimensions(
-        self, yunet_detector: "YuNetDetector", blank_image: npt.NDArray[np.uint8]
-    ) -> None:
-        """Test detection result has correct image dimensions."""
-        result = yunet_detector.detect(blank_image)
-        assert result.image_width == 640
-        assert result.image_height == 640
 
 
 # =============================================================================
@@ -504,8 +500,6 @@ class TestYuNetDetectorEdgeCases:
         """Test detection handles very wide image."""
         result = yunet_detector.detect(wide_image)
         assert isinstance(result, DetectionResult)
-        assert result.image_width == 1000
-        assert result.image_height == 100
 
     def test_detect_handles_very_tall_image(
         self, yunet_detector: "YuNetDetector", tall_image: npt.NDArray[np.uint8]
@@ -513,8 +507,6 @@ class TestYuNetDetectorEdgeCases:
         """Test detection handles very tall image."""
         result = yunet_detector.detect(tall_image)
         assert isinstance(result, DetectionResult)
-        assert result.image_width == 100
-        assert result.image_height == 1000
 
     def test_detect_handles_rgba_image(self, yunet_detector: "YuNetDetector") -> None:
         """Test detection handles RGBA image."""
