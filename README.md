@@ -39,6 +39,17 @@ Clean Architecture with 4 layers:
 - **Application**: Use cases orchestrating domain logic
 - **Presentation**: CLI and GUI interfaces
 
+## Documentation
+
+Comprehensive documentation is available in the [`docs/`](docs/README.md) directory:
+
+| Document | Description |
+|----------|-------------|
+| [Components](docs/components/README.md) | ML component guides |
+| [YuNetDetector](docs/components/yunet_detector.md) | Face detection |
+| [MobileFaceNetRecognizer](docs/components/mobilefacenet_recognizer.md) | Face recognition |
+| [Architecture Decisions](docs/architecture/decisions/) | ADRs |
+
 ## License
 
 MIT
