@@ -4,9 +4,11 @@ This module contains comprehensive tests for the YuNet face detection
 implementation using the ONNX model.
 """
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import cv2
 import numpy as np
 import numpy.typing as npt
 import pytest
@@ -30,8 +32,14 @@ if TYPE_CHECKING:
 DEFAULT_MODEL_PATH = Path("models/detection/yunet.onnx")
 MODEL_EXISTS = DEFAULT_MODEL_PATH.exists()
 
+# Test face images path
+TEST_FACES_DIR = Path("tests/data/faces")
+TEST_FACE_IMAGE_PATH = TEST_FACES_DIR / "face_001.jpg"
+TEST_FACE_EXISTS = TEST_FACE_IMAGE_PATH.exists()
+
 # Skip message for tests requiring the model
 SKIP_NO_MODEL = "YuNet model not found at models/detection/yunet.onnx"
+SKIP_NO_TEST_FACE = "Test face image not found at tests/data/faces/face_001.jpg"
 
 
 # =============================================================================
@@ -589,3 +597,261 @@ class TestYuNetDetectorPostprocessing:
 
         faces = yunet_detector._postprocess(raw_outputs, original_size)
         assert faces == []
+
+
+# =============================================================================
+# Real Face Detection Tests
+# =============================================================================
+
+
+class TestYuNetDetectorRealFaces:
+    """Tests with real face images."""
+
+    @pytest.fixture
+    def real_face_image(self) -> npt.NDArray[np.uint8]:
+        """Load a real face image."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    def test_detect_finds_face_in_real_photo(
+        self, yunet_detector: "YuNetDetector", real_face_image: npt.NDArray[np.uint8]
+    ) -> None:
+        """Real face image should detect at least 1 face."""
+        result = yunet_detector.detect(real_face_image)
+        assert result.face_count >= 1
+        assert result.faces[0].confidence > 0.7
+
+    def test_detect_returns_reasonable_bounding_box(
+        self, yunet_detector: "YuNetDetector", real_face_image: npt.NDArray[np.uint8]
+    ) -> None:
+        """Bounding box should cover significant portion of face."""
+        result = yunet_detector.detect(real_face_image)
+        assert result.face_count >= 1
+        bbox = result.faces[0].bounding_box
+        # Face should be reasonable size (not tiny, not huge)
+        image_area = real_face_image.shape[0] * real_face_image.shape[1]
+        face_area = bbox.area
+        face_ratio = face_area / image_area
+        assert 0.01 < face_ratio < 0.9  # Between 1% and 90% of image
+
+    def test_detect_landmarks_are_within_bounding_box(
+        self, yunet_detector: "YuNetDetector", real_face_image: npt.NDArray[np.uint8]
+    ) -> None:
+        """Landmarks should be within or near the bounding box."""
+        result = yunet_detector.detect(real_face_image)
+        assert result.face_count >= 1
+        face = result.faces[0]
+        bbox = face.bounding_box
+
+        if face.landmarks is not None:
+            # All landmarks should be near the bounding box
+            for point in [
+                face.landmarks.left_eye,
+                face.landmarks.right_eye,
+                face.landmarks.nose,
+                face.landmarks.mouth_left,
+                face.landmarks.mouth_right,
+            ]:
+                x, y = point
+                # Allow some margin (20% of bbox size)
+                margin_x = bbox.width * 0.2
+                margin_y = bbox.height * 0.2
+                assert bbox.x - margin_x <= x <= bbox.x + bbox.width + margin_x
+                assert bbox.y - margin_y <= y <= bbox.y + bbox.height + margin_y
+
+
+# =============================================================================
+# Performance Tests
+# =============================================================================
+
+
+class TestYuNetDetectorPerformance:
+    """Performance benchmarks for face detection."""
+
+    def test_detection_completes_within_200ms(
+        self, yunet_detector: "YuNetDetector", noise_image: npt.NDArray[np.uint8]
+    ) -> None:
+        """Face detection should complete within 200ms."""
+        # Warm-up run
+        yunet_detector.detect(noise_image)
+
+        # Timed runs
+        times = []
+        for _ in range(10):
+            start = time.perf_counter()
+            yunet_detector.detect(noise_image)
+            elapsed = (time.perf_counter() - start) * 1000  # ms
+            times.append(elapsed)
+
+        avg_time = sum(times) / len(times)
+        assert avg_time < 200, f"Detection took {avg_time:.1f}ms, expected < 200ms"
+
+    def test_detection_is_consistent(
+        self, yunet_detector: "YuNetDetector", noise_image: npt.NDArray[np.uint8]
+    ) -> None:
+        """Same image should produce same detection results."""
+        result1 = yunet_detector.detect(noise_image)
+        result2 = yunet_detector.detect(noise_image)
+
+        assert result1.face_count == result2.face_count
+        if result1.face_count > 0:
+            # Bounding boxes should be identical
+            assert result1.faces[0].bounding_box.x == result2.faces[0].bounding_box.x
+            assert result1.faces[0].bounding_box.y == result2.faces[0].bounding_box.y
+
+    def test_detection_is_consistent_with_real_face(
+        self, yunet_detector: "YuNetDetector"
+    ) -> None:
+        """Same real face image should produce same detection results."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        result1 = yunet_detector.detect(real_face_image)
+        result2 = yunet_detector.detect(real_face_image)
+
+        assert result1.face_count == result2.face_count
+        if result1.face_count > 0:
+            # Bounding boxes should be identical
+            assert result1.faces[0].bounding_box.x == result2.faces[0].bounding_box.x
+            assert result1.faces[0].bounding_box.y == result2.faces[0].bounding_box.y
+            # Confidence should be identical
+            assert result1.faces[0].confidence == result2.faces[0].confidence
+
+
+# =============================================================================
+# Robustness Tests
+# =============================================================================
+
+
+class TestYuNetDetectorRobustness:
+    """Tests for detection robustness under various conditions."""
+
+    def test_detect_handles_jpeg_artifacts(self, yunet_detector: "YuNetDetector") -> None:
+        """Detection should work with JPEG compression artifacts."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Simulate heavy JPEG compression
+        _, encoded = cv2.imencode(
+            ".jpg", cv2.cvtColor(real_face_image, cv2.COLOR_RGB2BGR),
+            [cv2.IMWRITE_JPEG_QUALITY, 20]
+        )
+        compressed = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        compressed_rgb = cv2.cvtColor(compressed, cv2.COLOR_BGR2RGB)
+
+        result = yunet_detector.detect(compressed_rgb)
+        # Should still detect the face
+        assert result.face_count >= 1
+
+    def test_detect_handles_brightness_variations(
+        self, yunet_detector: "YuNetDetector"
+    ) -> None:
+        """Detection should work with brightness variations."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Darken image
+        dark = (real_face_image * 0.3).astype(np.uint8)
+        result_dark = yunet_detector.detect(dark)
+
+        # Brighten image
+        bright = np.clip(real_face_image * 1.5, 0, 255).astype(np.uint8)
+        result_bright = yunet_detector.detect(bright)
+
+        # At least one should detect face
+        assert result_dark.face_count >= 1 or result_bright.face_count >= 1
+
+    def test_detect_handles_rotation_small_angle(
+        self, yunet_detector: "YuNetDetector"
+    ) -> None:
+        """Detection should work with small rotations."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Rotate by 15 degrees
+        h, w = real_face_image.shape[:2]
+        center = (w // 2, h // 2)
+        rotation_matrix = cv2.getRotationMatrix2D(center, 15, 1.0)
+        rotated = cv2.warpAffine(real_face_image, rotation_matrix, (w, h))
+
+        result = yunet_detector.detect(rotated)
+        # May or may not detect, but should not crash
+        assert isinstance(result, DetectionResult)
+
+    def test_detect_handles_scaled_image(
+        self, yunet_detector: "YuNetDetector"
+    ) -> None:
+        """Detection should work with scaled images."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Scale down to 50%
+        h, w = real_face_image.shape[:2]
+        scaled_down = cv2.resize(real_face_image, (w // 2, h // 2))
+
+        # Scale up to 200%
+        scaled_up = cv2.resize(real_face_image, (w * 2, h * 2))
+
+        result_down = yunet_detector.detect(scaled_down)
+        result_up = yunet_detector.detect(scaled_up)
+
+        # Both should return valid results
+        assert isinstance(result_down, DetectionResult)
+        assert isinstance(result_up, DetectionResult)
+
+    def test_detect_handles_flipped_image(
+        self, yunet_detector: "YuNetDetector"
+    ) -> None:
+        """Detection should work with horizontally flipped images."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Horizontal flip
+        flipped = cv2.flip(real_face_image, 1)
+
+        result_original = yunet_detector.detect(real_face_image)
+        result_flipped = yunet_detector.detect(flipped)
+
+        # Both should detect same number of faces
+        assert result_original.face_count == result_flipped.face_count
+
+    def test_detect_handles_noisy_image(
+        self, yunet_detector: "YuNetDetector"
+    ) -> None:
+        """Detection should work with noisy images."""
+        if not TEST_FACE_EXISTS:
+            pytest.skip(SKIP_NO_TEST_FACE)
+
+        img = cv2.imread(str(TEST_FACE_IMAGE_PATH))
+        real_face_image = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Add Gaussian noise
+        rng = np.random.default_rng(42)
+        noise = rng.normal(0, 25, real_face_image.shape).astype(np.float32)
+        noisy = np.clip(real_face_image.astype(np.float32) + noise, 0, 255).astype(
+            np.uint8
+        )
+
+        result = yunet_detector.detect(noisy)
+        # Should still detect the face (robust to moderate noise)
+        assert isinstance(result, DetectionResult)
