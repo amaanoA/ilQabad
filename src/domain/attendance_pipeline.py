@@ -101,9 +101,8 @@ class DefaultAttendancePipeline:
             # Check liveness
             liveness_result = self._liveness_checker.check(face_crop)
 
-            # Skip if not live or below liveness threshold
-            if not liveness_result.is_live:
-                continue
+            # Skip if liveness confidence is below threshold
+            # When threshold=0.0, this effectively bypasses liveness checking
             if liveness_result.confidence < self.liveness_threshold:
                 continue
 
