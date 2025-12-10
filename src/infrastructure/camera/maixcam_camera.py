@@ -1,0 +1,246 @@
+"""MaixCam camera source implementation for Sipeed MaixCam hardware.
+
+This module provides a camera source implementation using the MaixPy library
+for capturing frames from the Sipeed MaixCam device.
+
+Documentation: https://wiki.sipeed.com/maixpy/
+"""
+
+import threading
+import time
+from typing import Self
+
+import numpy as np
+import numpy.typing as npt
+
+from src.core.interfaces.camera import CameraConfig, Frame
+
+
+# MaixPy imports - only available on MaixCam device
+try:
+    from maix import camera, image, display
+    MAIXPY_AVAILABLE = True
+except ImportError:
+    MAIXPY_AVAILABLE = False
+    camera = None  # type: ignore
+    image = None  # type: ignore
+    display = None  # type: ignore
+
+
+class MaixCamSource:
+    """Camera source for Sipeed MaixCam hardware.
+
+    This implementation uses the MaixPy camera module to capture frames
+    from the MaixCam's built-in 2MP camera sensor. It converts frames
+    to RGB format compatible with the face recognition pipeline.
+
+    Note: This class only works on MaixCam hardware with MaixPy installed.
+    For development on desktop, use OpenCVCameraSource instead.
+
+    Attributes:
+        config: Camera configuration settings.
+
+    Example:
+        >>> # On MaixCam device
+        >>> camera = MaixCamSource()
+        >>> with camera:
+        ...     frame = camera.capture()
+        ...     if frame:
+        ...         process(frame.image)
+    """
+
+    def __init__(self, config: CameraConfig | None = None) -> None:
+        """Initialize the MaixCam camera source.
+
+        Args:
+            config: Camera configuration. Uses defaults if not provided.
+                Note: device_id is ignored on MaixCam (single camera).
+
+        Raises:
+            RuntimeError: If MaixPy is not available (not on MaixCam).
+        """
+        if not MAIXPY_AVAILABLE:
+            raise RuntimeError(
+                "MaixPy not available. This class only works on MaixCam hardware. "
+                "For development, use OpenCVCameraSource instead."
+            )
+
+        self.config = config or CameraConfig()
+        self._camera: camera.Camera | None = None
+        self._is_running = False
+        self._frame_counter = 0
+        self._lock = threading.Lock()
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the camera is currently capturing frames."""
+        return self._is_running
+
+    def start(self) -> None:
+        """Start the camera and begin capturing frames.
+
+        Initializes the MaixCam camera with configured resolution.
+        If the camera is already running, this is a no-op.
+        """
+        with self._lock:
+            if self._is_running:
+                return
+
+            try:
+                # Initialize MaixCam camera
+                # MaixPy camera.Camera() takes width, height, fps
+                self._camera = camera.Camera(
+                    self.config.width,
+                    self.config.height,
+                    image.Format.FMT_RGB888,
+                )
+
+                self._is_running = True
+                self._frame_counter = 0
+
+            except Exception as e:
+                self._is_running = False
+                self._camera = None
+                raise RuntimeError(f"Failed to initialize MaixCam: {e}")
+
+    def stop(self) -> None:
+        """Stop the camera and release resources.
+
+        Closes the MaixCam camera. If the camera is not running,
+        this is a no-op.
+        """
+        with self._lock:
+            if not self._is_running:
+                return
+
+            self._is_running = False
+
+            if self._camera is not None:
+                try:
+                    # MaixPy camera cleanup
+                    self._camera.close()
+                except Exception:
+                    pass  # Ignore close errors
+                self._camera = None
+
+    def capture(self) -> Frame | None:
+        """Capture a single frame from the MaixCam.
+
+        Captures a frame in RGB format and returns it wrapped in a
+        Frame dataclass.
+
+        Returns:
+            Frame if capture was successful, None if camera is not running
+            or capture failed.
+        """
+        with self._lock:
+            if not self._is_running or self._camera is None:
+                return None
+
+            try:
+                # Read frame from MaixCam
+                maix_image = self._camera.read()
+
+                if maix_image is None:
+                    return None
+
+                # Convert MaixPy image to numpy array
+                # MaixPy image.to_numpy() returns RGB data
+                rgb_frame = np.array(maix_image.to_numpy(), dtype=np.uint8)
+
+                # Ensure correct shape (height, width, 3)
+                if rgb_frame.ndim == 1:
+                    # Reshape flat array to image
+                    rgb_frame = rgb_frame.reshape(
+                        (self.config.height, self.config.width, 3)
+                    )
+
+                # Increment frame counter
+                self._frame_counter += 1
+
+                return Frame(
+                    image=rgb_frame,
+                    timestamp=time.time(),
+                    frame_id=self._frame_counter,
+                )
+
+            except Exception:
+                return None
+
+    def get_resolution(self) -> tuple[int, int]:
+        """Get the current resolution setting.
+
+        Returns:
+            Tuple of (width, height) from configuration.
+        """
+        return (self.config.width, self.config.height)
+
+    def set_resolution(self, width: int, height: int) -> bool:
+        """Set the camera resolution.
+
+        Note: On MaixCam, changing resolution requires restarting the camera.
+
+        Args:
+            width: New frame width in pixels.
+            height: New frame height in pixels.
+
+        Returns:
+            True if resolution was set successfully.
+
+        Raises:
+            ValueError: If width or height is not positive.
+        """
+        if width <= 0:
+            raise ValueError(f"width must be positive, got {width}")
+        if height <= 0:
+            raise ValueError(f"height must be positive, got {height}")
+
+        with self._lock:
+            was_running = self._is_running
+
+            # Stop camera if running (need to reinitialize with new resolution)
+            if was_running:
+                self._is_running = False
+                if self._camera is not None:
+                    try:
+                        self._camera.close()
+                    except Exception:
+                        pass
+                    self._camera = None
+
+            # Update config
+            self.config = CameraConfig(
+                width=width,
+                height=height,
+                fps=self.config.fps,
+                device_id=self.config.device_id,
+            )
+
+        # Restart if was running
+        if was_running:
+            self.start()
+
+        return True
+
+    def __enter__(self) -> Self:
+        """Enter context manager, starting the camera."""
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        """Exit context manager, stopping the camera."""
+        self.stop()
+
+
+def is_maixcam_available() -> bool:
+    """Check if MaixPy is available (running on MaixCam).
+
+    Returns:
+        True if MaixPy is importable, False otherwise.
+    """
+    return MAIXPY_AVAILABLE
