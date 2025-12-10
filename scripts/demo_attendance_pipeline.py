@@ -71,6 +71,106 @@ def print_result(label: str, success: bool, details: str = "") -> None:
         print(f"  {status} {label}")
 
 
+def debug_test_image(
+    img: np.ndarray,
+    label: str,
+    detector,
+    liveness_checker,
+    recognizer,
+    enrolled_embeddings: dict,
+    recognition_threshold: float = 0.6,
+) -> dict:
+    """Run detailed debug test on an image showing each step.
+
+    Returns dict with detection, liveness, recognition results.
+    """
+    from src.core.interfaces.recognizer import cosine_similarity
+
+    result = {
+        "detection": None,
+        "liveness": None,
+        "recognition": None,
+        "matched_id": None,
+        "timing": {},
+    }
+
+    print(f"    Testing: {label}")
+
+    # Step 1: Detection
+    start = time.time()
+    detection_result = detector.detect(img)
+    result["timing"]["detection"] = (time.time() - start) * 1000
+
+    if not detection_result.has_faces:
+        print(f"      Detection: No faces found [{result['timing']['detection']:.0f}ms]")
+        result["detection"] = {"faces": 0}
+        return result
+
+    face = detection_result.largest_face
+    bbox = face.bounding_box
+    print(f"      Detection: {len(detection_result.faces)} face(s) found")
+    print(f"        Largest: [x={bbox.x}, y={bbox.y}, w={bbox.width}, h={bbox.height}] conf={face.confidence:.2f}")
+    result["detection"] = {
+        "faces": len(detection_result.faces),
+        "bbox": (bbox.x, bbox.y, bbox.width, bbox.height),
+        "confidence": face.confidence,
+    }
+
+    # Crop face
+    h, w = img.shape[:2]
+    x1 = max(0, bbox.x)
+    y1 = max(0, bbox.y)
+    x2 = min(w, bbox.x + bbox.width)
+    y2 = min(h, bbox.y + bbox.height)
+    face_crop = img[y1:y2, x1:x2]
+
+    # Step 2: Liveness
+    start = time.time()
+    liveness_result = liveness_checker.check(face_crop)
+    result["timing"]["liveness"] = (time.time() - start) * 1000
+
+    print(f"      Liveness: is_live={liveness_result.is_live}, confidence={liveness_result.confidence:.3f} [{result['timing']['liveness']:.0f}ms]")
+    result["liveness"] = {
+        "is_live": liveness_result.is_live,
+        "confidence": liveness_result.confidence,
+    }
+
+    # Step 3: Recognition (always run in debug mode to see similarity)
+    start = time.time()
+    embedding = recognizer.extract(face_crop)
+    result["timing"]["recognition"] = (time.time() - start) * 1000
+
+    # Match against enrolled students
+    best_match = None
+    best_similarity = -1.0
+
+    for student_id, embeddings in enrolled_embeddings.items():
+        for enrolled_emb in embeddings:
+            similarity = cosine_similarity(embedding, enrolled_emb)
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_match = student_id
+
+    print(f"      Recognition: best_match={best_match}, similarity={best_similarity:.3f} [{result['timing']['recognition']:.0f}ms]")
+
+    if best_similarity >= recognition_threshold:
+        result["matched_id"] = best_match
+        print(f"        -> MATCH (threshold={recognition_threshold})")
+    else:
+        print(f"        -> NO MATCH (threshold={recognition_threshold})")
+
+    result["recognition"] = {
+        "best_match": best_match,
+        "similarity": best_similarity,
+        "threshold": recognition_threshold,
+    }
+
+    total_time = sum(result["timing"].values())
+    print(f"      Total time: {total_time:.0f}ms")
+
+    return result
+
+
 def main() -> int:
     """Run the attendance pipeline demo."""
     parser = argparse.ArgumentParser(description="ilQabad Attendance Pipeline Demo")
@@ -90,6 +190,16 @@ def main() -> int:
         type=Path,
         default=Path("data/sample_faces"),
         help="Path to sample faces directory",
+    )
+    parser.add_argument(
+        "--skip-liveness",
+        action="store_true",
+        help="Bypass liveness check (set threshold to 0.0) for testing recognition",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Show detailed debug output for each recognition step",
     )
     args = parser.parse_args()
 
@@ -174,6 +284,7 @@ def main() -> int:
     # Step 2: Create Pipeline
     # -------------------------------------------------------------------------
     pipeline = None
+    liveness_threshold = 0.0 if args.skip_liveness else 0.5
     if detector and recognizer and liveness:
         print_header("Creating Attendance Pipeline")
         try:
@@ -183,9 +294,12 @@ def main() -> int:
                 recognizer=recognizer,
                 liveness_checker=liveness,
                 recognition_threshold=0.6,
-                liveness_threshold=0.5,
+                liveness_threshold=liveness_threshold,
             )
             print("  [OK] AttendancePipeline created successfully")
+            if args.skip_liveness:
+                print("  [INFO] Liveness check BYPASSED (--skip-liveness)")
+            print(f"  [INFO] Liveness threshold: {liveness_threshold}")
         except Exception as e:
             print(f"  [FAIL] Failed to create pipeline: {e}")
 
@@ -275,18 +389,42 @@ def main() -> int:
 
         tests_run += 1
         if pipeline:
-            start = time.time()
-            results = pipeline.process_frame(img)
-            elapsed = (time.time() - start) * 1000
-
-            if results and results[0].student_id == student_id:
-                tests_passed += 1
-                conf = results[0].confidence
-                print(f"    [PASS] {student_id}: Recognized (conf={conf:.2f}) [{elapsed:.0f}ms]")
-            elif results:
-                print(f"    [FAIL] {student_id}: Wrong match ({results[0].student_id})")
+            if args.debug and detector and liveness and recognizer:
+                # Debug mode: show step-by-step results
+                debug_result = debug_test_image(
+                    img=img,
+                    label=student_id,
+                    detector=detector,
+                    liveness_checker=liveness,
+                    recognizer=recognizer,
+                    enrolled_embeddings=pipeline._enrolled_students,
+                    recognition_threshold=0.6,
+                )
+                # Determine pass/fail based on liveness threshold
+                liveness_ok = debug_result["liveness"] and debug_result["liveness"]["confidence"] >= liveness_threshold
+                matched = debug_result["matched_id"] == student_id
+                if liveness_ok and matched:
+                    tests_passed += 1
+                    print(f"      Result: [PASS] Recognized as {student_id}")
+                elif not liveness_ok:
+                    print(f"      Result: [FAIL] Blocked by liveness (conf={debug_result['liveness']['confidence']:.3f} < {liveness_threshold})")
+                elif not matched:
+                    print(f"      Result: [FAIL] Wrong match or no match")
+                print()
             else:
-                print(f"    [FAIL] {student_id}: Not recognized [{elapsed:.0f}ms]")
+                # Normal mode
+                start = time.time()
+                results = pipeline.process_frame(img)
+                elapsed = (time.time() - start) * 1000
+
+                if results and results[0].student_id == student_id:
+                    tests_passed += 1
+                    conf = results[0].confidence
+                    print(f"    [PASS] {student_id}: Recognized (conf={conf:.2f}) [{elapsed:.0f}ms]")
+                elif results:
+                    print(f"    [FAIL] {student_id}: Wrong match ({results[0].student_id})")
+                else:
+                    print(f"    [FAIL] {student_id}: Not recognized [{elapsed:.0f}ms]")
         else:
             print(f"    [SKIP] {student_id}: Pipeline unavailable")
 
