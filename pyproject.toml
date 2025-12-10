@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Face Recognition Attendance System for Somali Schools"
 authors = ["Amaan <your-email>"]
 readme = "README.md"
+packages = [{ include = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
