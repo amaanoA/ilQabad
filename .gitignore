@@ -34,6 +34,7 @@ models/*.onnx
 # Data
 data/*.db
 data/*.sqlite
+data/sample_faces/
 
 # OS
 .DS_Store
