@@ -1,31 +1,22 @@
 #!/usr/bin/env python3
-"""Download sample face images for testing the attendance pipeline.
+"""Download or prepare sample face images for testing the attendance pipeline.
 
-This script downloads sample face images from public sources for testing.
-Images are stored in data/sample_faces/ directory.
+This script prepares sample face images for testing:
+1. If data/real_faces/ exists, uses real face images
+2. Otherwise, generates synthetic face images
 
 Usage:
     python scripts/download_sample_faces.py
 """
 
-import os
-import urllib.request
+import shutil
 from pathlib import Path
 
+import cv2
 import numpy as np
 
-# Sample face image URLs from public datasets
-# Using Wikimedia Commons images (public domain / CC licensed)
-SAMPLE_FACE_URLS = {
-    "person_001": [
-        # Using placeholder - in real usage, use actual face image URLs
-        # These would be replaced with real face dataset URLs
-    ],
-    "person_002": [],
-    "person_003": [],
-}
-
-# Directory to store sample faces
+# Directory paths
+REAL_FACES_DIR = Path("data/real_faces")
 SAMPLE_FACES_DIR = Path("data/sample_faces")
 
 
@@ -104,11 +95,11 @@ def create_spoof_image(real_image: np.ndarray, seed: int = 42) -> np.ndarray:
     - Moire pattern simulation
 
     Args:
-        real_image: Original face image
+        real_image: Original face image (RGB)
         seed: Random seed
 
     Returns:
-        Spoofed version of the image
+        Spoofed version of the image (RGB)
     """
     rng = np.random.default_rng(seed)
     spoof = real_image.copy().astype(np.float32)
@@ -133,12 +124,135 @@ def create_spoof_image(real_image: np.ndarray, seed: int = 42) -> np.ndarray:
     return np.clip(spoof, 0, 255).astype(np.uint8)
 
 
-def download_or_generate_samples() -> dict[str, list[Path]]:
-    """Download sample faces or generate synthetic ones.
+def load_image_rgb(path: Path) -> np.ndarray | None:
+    """Load an image and convert to RGB format.
+
+    Args:
+        path: Path to image file
+
+    Returns:
+        RGB image as numpy array, or None if loading failed
+    """
+    if not path.exists():
+        return None
+    bgr = cv2.imread(str(path))
+    if bgr is None:
+        return None
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def save_image_rgb(image: np.ndarray, path: Path) -> bool:
+    """Save an RGB image to file.
+
+    Args:
+        image: RGB image as numpy array
+        path: Destination path
+
+    Returns:
+        True if saved successfully
+    """
+    bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    return cv2.imwrite(str(path), bgr)
+
+
+def use_real_faces() -> dict[str, list[Path]]:
+    """Use real face images from data/real_faces/.
+
+    Maps:
+    - real_face-01.jpg -> student_001
+    - real_face-02.jpg -> student_002
+    - real_face-03.jpg -> student_003
+    - real_face-04.jpg -> unknown
 
     Returns:
         Dictionary mapping person IDs to list of image paths
     """
+    print("Using real face images from data/real_faces/")
+    print()
+
+    # Clean up existing sample_faces directory
+    if SAMPLE_FACES_DIR.exists():
+        shutil.rmtree(SAMPLE_FACES_DIR)
+    SAMPLE_FACES_DIR.mkdir(parents=True, exist_ok=True)
+
+    persons = {}
+
+    # Map real faces to students
+    student_mapping = [
+        ("real_face-01.jpg", "student_001"),
+        ("real_face-02.jpg", "student_002"),
+        ("real_face-03.jpg", "student_003"),
+    ]
+
+    print("Copying real faces to student directories...")
+    for real_name, student_id in student_mapping:
+        real_path = REAL_FACES_DIR / real_name
+        if not real_path.exists():
+            print(f"  [SKIP] {real_name} not found")
+            continue
+
+        # Create student directory
+        student_dir = SAMPLE_FACES_DIR / student_id
+        student_dir.mkdir(exist_ok=True)
+
+        # Copy the image
+        dest_path = student_dir / "face_1.jpg"
+        shutil.copy2(real_path, dest_path)
+
+        persons[student_id] = [dest_path]
+        print(f"  [OK] {real_name} -> {student_id}/face_1.jpg")
+
+    # Generate spoof samples from real faces
+    spoof_dir = SAMPLE_FACES_DIR / "spoofs"
+    spoof_dir.mkdir(exist_ok=True)
+
+    print()
+    print("Generating spoof samples from real faces...")
+    for real_name, student_id in student_mapping[:2]:  # First 2 students
+        real_path = REAL_FACES_DIR / real_name
+        if not real_path.exists():
+            continue
+
+        # Load the real image
+        image = load_image_rgb(real_path)
+        if image is None:
+            continue
+
+        # Create spoof version
+        spoof = create_spoof_image(image, seed=hash(student_id) % 10000)
+
+        # Save spoof
+        spoof_path = spoof_dir / f"spoof_{student_id}.jpg"
+        save_image_rgb(spoof, spoof_path)
+        print(f"  [OK] Created spoof from {real_name} -> spoofs/spoof_{student_id}.jpg")
+
+    # Use real_face-04.jpg as unknown person
+    unknown_dir = SAMPLE_FACES_DIR / "unknown"
+    unknown_dir.mkdir(exist_ok=True)
+
+    print()
+    print("Setting up unknown person samples...")
+    unknown_source = REAL_FACES_DIR / "real_face-04.jpg"
+    if unknown_source.exists():
+        unknown_dest = unknown_dir / "unknown_1.jpg"
+        shutil.copy2(unknown_source, unknown_dest)
+        print(f"  [OK] real_face-04.jpg -> unknown/unknown_1.jpg")
+    else:
+        print("  [SKIP] real_face-04.jpg not found")
+
+    return persons
+
+
+def generate_synthetic_faces() -> dict[str, list[Path]]:
+    """Generate synthetic face samples.
+
+    Returns:
+        Dictionary mapping person IDs to list of image paths
+    """
+    print("Generating synthetic face samples...")
+    print("(Real faces not found. For better testing, add images to data/real_faces/)")
+    print()
+
     SAMPLE_FACES_DIR.mkdir(parents=True, exist_ok=True)
 
     # Skin tones for diversity
@@ -149,9 +263,6 @@ def download_or_generate_samples() -> dict[str, list[Path]]:
     ]
 
     persons = {}
-
-    print("Generating synthetic face samples...")
-    print("(In production, use real face images from LFW or similar datasets)")
 
     for i, person_id in enumerate(["student_001", "student_002", "student_003"]):
         person_dir = SAMPLE_FACES_DIR / person_id
@@ -172,19 +283,7 @@ def download_or_generate_samples() -> dict[str, list[Path]]:
 
             # Save image
             image_path = person_dir / f"face_{j+1}.png"
-
-            try:
-                import cv2
-                cv2.imwrite(str(image_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-            except ImportError:
-                # Fallback to PIL if cv2 not available for writing
-                try:
-                    from PIL import Image
-                    Image.fromarray(image).save(image_path)
-                except ImportError:
-                    # Just save as numpy file
-                    np.save(str(image_path).replace(".png", ".npy"), image)
-                    image_path = Path(str(image_path).replace(".png", ".npy"))
+            save_image_rgb(image, image_path)
 
             persons[person_id].append(image_path)
             print(f"  Created: {image_path}")
@@ -193,30 +292,23 @@ def download_or_generate_samples() -> dict[str, list[Path]]:
     spoof_dir = SAMPLE_FACES_DIR / "spoofs"
     spoof_dir.mkdir(exist_ok=True)
 
-    print("\nGenerating spoof samples...")
+    print()
+    print("Generating spoof samples...")
     for i, person_id in enumerate(["student_001", "student_002"]):
         # Create spoof from first image of each person
         original = create_synthetic_face(seed=i * 1000, skin_tone=skin_tones[i])
         spoof = create_spoof_image(original, seed=i)
 
         spoof_path = spoof_dir / f"spoof_{person_id}.png"
-        try:
-            import cv2
-            cv2.imwrite(str(spoof_path), cv2.cvtColor(spoof, cv2.COLOR_RGB2BGR))
-        except ImportError:
-            try:
-                from PIL import Image
-                Image.fromarray(spoof).save(spoof_path)
-            except ImportError:
-                np.save(str(spoof_path).replace(".png", ".npy"), spoof)
-
+        save_image_rgb(spoof, spoof_path)
         print(f"  Created: {spoof_path}")
 
     # Generate unknown person samples
     unknown_dir = SAMPLE_FACES_DIR / "unknown"
     unknown_dir.mkdir(exist_ok=True)
 
-    print("\nGenerating unknown person samples...")
+    print()
+    print("Generating unknown person samples...")
     for i in range(2):
         seed = 9000 + i
         # Use different skin tone than enrolled students
@@ -224,45 +316,53 @@ def download_or_generate_samples() -> dict[str, list[Path]]:
         image = create_synthetic_face(seed=seed, skin_tone=skin_tone)
 
         unknown_path = unknown_dir / f"unknown_{i+1}.png"
-        try:
-            import cv2
-            cv2.imwrite(str(unknown_path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-        except ImportError:
-            try:
-                from PIL import Image
-                Image.fromarray(image).save(unknown_path)
-            except ImportError:
-                np.save(str(unknown_path).replace(".png", ".npy"), image)
-
+        save_image_rgb(image, unknown_path)
         print(f"  Created: {unknown_path}")
 
     return persons
 
 
 def main():
-    """Main function to download/generate sample faces."""
+    """Main function to prepare sample faces."""
     print("=" * 60)
-    print("Sample Face Generator for ilQabad Attendance System")
+    print("Sample Face Preparation for ilQabad Attendance System")
     print("=" * 60)
     print()
 
-    persons = download_or_generate_samples()
+    # Check if real faces are available
+    real_faces_available = (
+        REAL_FACES_DIR.exists()
+        and len(list(REAL_FACES_DIR.glob("*.jpg"))) >= 3
+    )
+
+    if real_faces_available:
+        persons = use_real_faces()
+        face_type = "real"
+    else:
+        persons = generate_synthetic_faces()
+        face_type = "synthetic"
 
     print()
     print("=" * 60)
     print("Summary")
     print("=" * 60)
     print(f"Sample faces directory: {SAMPLE_FACES_DIR.absolute()}")
-    print(f"Students generated: {len(persons)}")
+    print(f"Face type: {face_type}")
+    print(f"Students prepared: {len(persons)}")
     for person_id, paths in persons.items():
-        print(f"  {person_id}: {len(paths)} images")
+        print(f"  {person_id}: {len(paths)} image(s)")
     print()
     print("Additional samples:")
     print(f"  Spoofs: {SAMPLE_FACES_DIR / 'spoofs'}")
     print(f"  Unknown: {SAMPLE_FACES_DIR / 'unknown'}")
-    print()
-    print("Note: These are synthetic faces for pipeline testing only.")
-    print("For real accuracy testing, use actual face datasets like LFW.")
+
+    if face_type == "real":
+        print()
+        print("Using real face images for accurate pipeline testing.")
+    else:
+        print()
+        print("Note: These are synthetic faces for pipeline testing only.")
+        print("For real accuracy testing, add face images to data/real_faces/")
 
 
 if __name__ == "__main__":

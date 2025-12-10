@@ -209,7 +209,7 @@ def main() -> int:
     else:
         for student_dir in student_dirs:
             student_id = student_dir.name
-            photos = sorted(student_dir.glob("*.png")) + sorted(student_dir.glob("*.npy"))
+            photos = sorted(student_dir.glob("*.png")) + sorted(student_dir.glob("*.jpg")) + sorted(student_dir.glob("*.npy"))
 
             if not photos:
                 print(f"  [SKIP] {student_id}: No photos found")
@@ -263,13 +263,13 @@ def main() -> int:
     print("  Testing known faces (enrolled students):")
     for student_id in enrolled_students[:2]:  # Test first 2 enrolled
         student_dir = students_dir / student_id
-        test_photo = list(student_dir.glob("*.png"))
+        test_photo = list(student_dir.glob("*.png")) + list(student_dir.glob("*.jpg"))
         if not test_photo:
             test_photo = list(student_dir.glob("*.npy"))
         if not test_photo:
             continue
 
-        img = load_image(test_photo[0]) if test_photo[0].suffix == ".png" else np.load(str(test_photo[0]))
+        img = load_image(test_photo[0]) if test_photo[0].suffix in (".png", ".jpg") else np.load(str(test_photo[0]))
         if img is None:
             continue
 
@@ -295,9 +295,9 @@ def main() -> int:
     print("  Testing spoof faces (should be rejected):")
     spoof_dir = students_dir / "spoofs"
     if spoof_dir.exists():
-        spoof_files = list(spoof_dir.glob("*.png")) + list(spoof_dir.glob("*.npy"))
+        spoof_files = list(spoof_dir.glob("*.png")) + list(spoof_dir.glob("*.jpg")) + list(spoof_dir.glob("*.npy"))
         for spoof_path in spoof_files[:2]:  # Test first 2 spoofs
-            img = load_image(spoof_path) if spoof_path.suffix == ".png" else np.load(str(spoof_path))
+            img = load_image(spoof_path) if spoof_path.suffix in (".png", ".jpg") else np.load(str(spoof_path))
             if img is None:
                 continue
 
@@ -322,9 +322,9 @@ def main() -> int:
     print("  Testing unknown faces (should not match enrolled):")
     unknown_dir = students_dir / "unknown"
     if unknown_dir.exists():
-        unknown_files = list(unknown_dir.glob("*.png")) + list(unknown_dir.glob("*.npy"))
+        unknown_files = list(unknown_dir.glob("*.png")) + list(unknown_dir.glob("*.jpg")) + list(unknown_dir.glob("*.npy"))
         for unknown_path in unknown_files[:2]:  # Test first 2 unknowns
-            img = load_image(unknown_path) if unknown_path.suffix == ".png" else np.load(str(unknown_path))
+            img = load_image(unknown_path) if unknown_path.suffix in (".png", ".jpg") else np.load(str(unknown_path))
             if img is None:
                 continue
 
